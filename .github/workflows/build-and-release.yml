@@ -1,0 +1,109 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'  # Trigger on version tags like v1, v2, v3, etc.
+  workflow_dispatch:  # Allow manual triggering
+    inputs:
+      version:
+        description: 'Version to build (e.g., 1, 2, 3)'
+        required: true
+        default: '1'
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04-arm
+    permissions:
+      contents: write  # Required for creating releases and uploading assets
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential python3 python3-pip python3-venv curl wget git
+
+    - name: Extract version
+      id: get_version
+      run: |
+        if [[ "${{ github.event_name }}" == "push" ]]; then
+          VERSION=${GITHUB_REF#refs/tags/v}
+          TAG_NAME=${GITHUB_REF#refs/tags/}
+        else
+          VERSION="${{ github.event.inputs.version }}"
+          TAG_NAME="v$VERSION"
+        fi
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
+        echo "Building version: $VERSION"
+
+    - name: Build project
+      run: |
+        chmod +x scripts/build.sh
+        ./scripts/build.sh ${{ steps.get_version.outputs.version }}
+
+    - name: Find generated tar file
+      id: find_tar
+      run: |
+        TAR_FILE=$(find . -name "arm-migration-tools-v*.tar.gz" -type f | head -1)
+        if [[ -z "$TAR_FILE" ]]; then
+          echo "Error: No tar file found matching pattern arm-migration-tools-v*.tar.gz"
+          exit 1
+        fi
+        echo "tar_file=$TAR_FILE" >> $GITHUB_OUTPUT
+        echo "tar_name=$(basename $TAR_FILE)" >> $GITHUB_OUTPUT
+        echo "Found tar file: $TAR_FILE"
+
+    - name: Verify tar file
+      run: |
+        TAR_FILE="${{ steps.find_tar.outputs.tar_file }}"
+        echo "Verifying tar file: $TAR_FILE"
+        ls -lh "$TAR_FILE"
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: ${{ steps.get_version.outputs.tag_name }}
+        name: Arm Linux Migration Tools ${{ steps.get_version.outputs.tag_name }}
+        body: |
+          ## Arm Linux Migration Tools ${{ steps.get_version.outputs.tag_name }}
+          
+          This release contains a comprehensive package of 13 migration tools specifically designed to help developers migrate applications and workloads to Arm servers.
+          
+          ### Installation
+          
+          **Quick Install (Recommended):**
+          ```bash
+          curl -sSL https://raw.githubusercontent.com/arm/arm-linux-migration-tools/main/scripts/install.sh | bash
+          ```
+          
+          **Manual Install:**
+          ```bash
+          wget https://github.com/arm/arm-linux-migration-tools/releases/download/${{ steps.get_version.outputs.tag_name }}/${{ steps.find_tar.outputs.tar_name }}
+          tar xzf ${{ steps.find_tar.outputs.tar_name }}
+          cd arm-migration-tools
+          ./scripts/install.sh
+          ```
+          
+          ### System Requirements
+          - **Architecture**: Arm (aarch64)
+          - **Operating System**: Linux (Ubuntu 22.04/24.04 recommended)
+          - **Dependencies**: Python 3, build tools, and package manager (apt/yum/dnf)
+          
+          ### Included Tools
+          This package includes: Sysreport, Skopeo, MCA (llvm-mca), Topdown Tool, KubeArchInspect, Migrate Ease, Aperf, BOLT, PAPI, Perf, Process Watch, Check Image, and Porting Advisor.
+          
+          For detailed documentation, visit [learn.arm.com](https://learn.arm.com).
+        files: ${{ steps.find_tar.outputs.tar_file }}
+        draft: false
+        prerelease: false
+
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: arm-migration-tools-${{ steps.get_version.outputs.version }}
+        path: ${{ steps.find_tar.outputs.tar_file }}
+        retention-days: 30
