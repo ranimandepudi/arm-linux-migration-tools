@@ -27,12 +27,14 @@ curl -sSL https://raw.githubusercontent.com/arm/arm-linux-migration-tools/main/s
 Download the release tarball and install locally:
 
 ```bash
+# create new directory for the download
+mkdir arm-migration-tools && cd arm-migration-tools
+
 # Download the latest release
 wget https://github.com/arm/arm-linux-migration-tools/releases/latest/download/arm-migration-tools-v1.tar.gz
 
 # Extract and install
 tar xzf arm-migration-tools-v1.tar.gz
-cd arm-migration-tools
 ./scripts/install.sh
 ```
 
@@ -43,7 +45,7 @@ To build all tools from source:
 ```bash
 git clone https://github.com/arm/arm-linux-migration-tools.git
 cd arm-linux-migration-tools
-./scripts/build.sh [version]
+./scripts/build.sh 
 ```
 
 The `build.sh` script will:
@@ -51,6 +53,7 @@ The `build.sh` script will:
 - Download and configure package-manager tools
 - Create Python virtual environments for Python-based tools
 - Package everything into a distributable tarball (`arm-migration-tools-v[version].tar.gz`)
+- The default version is 1 but you can pass an integer to `./build.sh` to set a new version number.
 
 ### Uninstall
 
