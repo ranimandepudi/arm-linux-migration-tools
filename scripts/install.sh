@@ -13,6 +13,8 @@ fi
 INSTALL_PREFIX="/opt/arm-migration-tools"
 GITHUB_REPO="arm/arm-linux-migration-tools"
 
+sudo apt-get install -y build-essential python3 python3-pip python3-venv python-is-python3 curl wget git
+
 # Detect if this is a remote installation (no local tarball files)
 REMOTE_INSTALL=false
 if [ ! -f "$(dirname "$0")/../README.md" ] && [ -z "$(ls arm-migration-tools-v*.tar.gz 2>/dev/null)" ]; then
