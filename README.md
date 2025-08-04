@@ -20,7 +20,7 @@ The Arm Linux Migration Tools package simplifies the process of migrating applic
 Install directly from the latest GitHub release:
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/arm/arm-migration-tools/main/scripts/install.sh | bash
+curl -sSL https://raw.githubusercontent.com/arm/arm-linux-migration-tools/main/scripts/install.sh | bash
 ```
 
 #### Option 2: Local Installation
@@ -28,14 +28,13 @@ Download the release tarball and install locally:
 
 ```bash
 # Download the latest release
-curl -sSL https://raw.githubusercontent.com/arm/arm-linux-migration-tools/main/scripts/install.sh | bash
+wget https://github.com/arm/arm-linux-migration-tools/releases/latest/download/arm-migration-tools-v1.tar.gz
 
 # Extract and install
 tar xzf arm-migration-tools-v1.tar.gz
 cd arm-migration-tools
 ./scripts/install.sh
-wget https://github.com/arm/arm-linux-migration-tools/releases/latest/download/arm-migration-tools-v1.tar.gz
-
+```
 
 ### Build from Source
 
@@ -43,16 +42,17 @@ To build all tools from source:
 
 ```bash
 git clone https://github.com/arm/arm-linux-migration-tools.git
-cd arm-migration-tools
+cd arm-linux-migration-tools
 ./scripts/build.sh [version]
 ```
+
 The `build.sh` script will:
 - Build all tools from source where required
 - Download and configure package-manager tools
 - Create Python virtual environments for Python-based tools
 - Package everything into a distributable tarball (`arm-migration-tools-v[version].tar.gz`)
 
-### Unintall
+### Uninstall
 
 You can uninstall by running:
 
@@ -213,7 +213,7 @@ Tools available through package managers (like `perf`, `llvm-mca`, `skopeo`) are
 ### Project Structure
 
 ```
-arm-migration-tools/
+arm-linux-migration-tools/
 ├── scripts/                 # Build, install, and uninstall scripts
 │   ├── build.sh            # Main build script
 │   ├── install.sh          # Main installation script

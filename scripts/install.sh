@@ -11,7 +11,7 @@ if [ "$ARCH" != "aarch64" ]; then
 fi
 
 INSTALL_PREFIX="/opt/arm-migration-tools"
-GITHUB_REPO="arm/arm-migration-tools"
+GITHUB_REPO="arm/arm-linux-migration-tools"
 
 # Detect if this is a remote installation (no local tarball files)
 REMOTE_INSTALL=false
