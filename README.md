@@ -17,13 +17,15 @@ The Arm Linux Migration Tools package simplifies the process of migrating applic
 ### Installation
 
 #### Option 1: Remote Installation (Recommended)
+
 Install directly from the latest GitHub release:
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/arm/arm-linux-migration-tools/main/scripts/install.sh | bash
+curl -sSL https://raw.githubusercontent.com/arm/arm-linux-migration-tools/main/scripts/install.sh | sudo bash
 ```
 
 #### Option 2: Local Installation
+
 Download the release tarball and install locally:
 
 ```bash
@@ -35,7 +37,7 @@ wget https://github.com/arm/arm-linux-migration-tools/releases/latest/download/a
 
 # Extract and install
 tar xzf arm-migration-tools-v1.tar.gz
-./scripts/install.sh
+sudo ./scripts/install.sh
 ```
 
 ### Build from Source
