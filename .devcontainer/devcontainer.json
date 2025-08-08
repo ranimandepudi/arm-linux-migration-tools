@@ -1,0 +1,10 @@
+{
+    "name": "Arm Migration Tools Dev Container",
+    "image": "docker.io/armswdev/arm-migration-tools-devcontiner:arm64",
+    "features": {},
+    "mounts": [
+        "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=cached"
+    ],
+    "workspaceFolder": "/workspace",
+    "remoteUser": "ubuntu"
+}
