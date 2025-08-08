@@ -77,15 +77,7 @@ jobs:
           
           **Quick Install (Recommended):**
           ```bash
-          curl -sSL https://raw.githubusercontent.com/arm/arm-linux-migration-tools/main/scripts/install.sh | bash
-          ```
-          
-          **Manual Install:**
-          ```bash
-          wget https://github.com/arm/arm-linux-migration-tools/releases/download/${{ steps.get_version.outputs.tag_name }}/${{ steps.find_tar.outputs.tar_name }}
-          tar xzf ${{ steps.find_tar.outputs.tar_name }}
-          cd arm-migration-tools
-          ./scripts/install.sh
+          curl -sSL https://raw.githubusercontent.com/arm/arm-linux-migration-tools/main/scripts/install.sh | sudo bash
           ```
           
           ### System Requirements
