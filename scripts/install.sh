@@ -218,14 +218,11 @@ if [ -f "$SCRIPTS_DIR/install_kubearchinspect.sh" ]; then
   fi
 fi
 
-# Install perf
+# ---- Perf: always ensure it's installed & wired correctly ----
 if [ -f "$SCRIPTS_DIR/install_perf.sh" ]; then
-  if command -v perf >/dev/null 2>&1; then
-    echo "[INFO] Perf already installed, skipping."
-  else
-    echo "[INFO] Installing Perf..."
-    bash "$SCRIPTS_DIR/install_perf.sh"
-  fi
+  echo "[INFO] Ensuring Perf is installed and wired..."
+  # Tune kernel.perf_event_paranoid unless explicitly disabled by caller
+  PERF_TUNE_SYSCTL="${PERF_TUNE_SYSCTL:-1}" bash "$SCRIPTS_DIR/install_perf.sh" || true
 fi
 
 # Install MCA (llvm-mca)

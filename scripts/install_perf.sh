@@ -1,88 +1,175 @@
-#!/bin/bash
-# Install Perf using the system package manager
-set -e
+#!/usr/bin/env bash
+# Robust perf installer for Ubuntu (incl. AWS kernels) & Amazon Linux
+# - Installs packages
+# - Wires Ubuntu wrapper to a real perf helper (no warnings, no loops)
+# - (Optional) Sets persistent sysctl to allow perf to run by default
+set -euo pipefail
 
-install_perf() {
-    if [ -f /etc/os-release ]; then
-        . /etc/os-release
+log(){ printf '%s\n' "$*"; }
+info(){ log "[INFO] $*"; }
+warn(){ log "[WARN] $*"; }
 
-        if [[ $ID == "ubuntu" || $ID == "debian" ]]; then
-            echo "[INFO] Installing Perf with apt..."
-            KVER="$(uname -r)"
-            if sudo apt-get update && sudo apt-get install -y linux-tools-common linux-tools-generic "linux-tools-${KVER}"; then
-                # cloud-tools is optional; ignore failure if missing
-                sudo apt-get install -y "linux-cloud-tools-${KVER}" || true
+PERF_TUNE_SYSCTL="${PERF_TUNE_SYSCTL:-1}"   # set to 0 to skip sysctl tuning
 
-                # If the kernel-matched perf helper doesn't exist, fall back to the newest available
-                if [ ! -x "/usr/lib/linux-tools/${KVER}/perf" ]; then
-                    echo "[WARN] No perf helper for ${KVER}, trying fallback..."
-                    FALLBACK=$(ls -1 /usr/lib/linux-tools-*/perf 2>/dev/null | sort -V | tail -n1 || true)
-                    if [ -n "$FALLBACK" ]; then
-                        sudo mkdir -p "/usr/lib/linux-tools/${KVER}"
-                        sudo ln -sf "$FALLBACK" "/usr/lib/linux-tools/${KVER}/perf"
-                        FBVER=$(basename "$(dirname "$FALLBACK")" | sed 's/^linux-tools-//')
-                        echo "[INFO] Symlinked fallback perf from kernel ${FBVER} -> expected ${KVER}"
-                        echo "[INFO] Note: software events will work; some hardware events may not with a mismatched helper."
-                    else
-                        echo "[WARN] No fallback perf found on system."
-                    fi
-                fi
-
-                echo "[INFO] Perf installation complete. Run 'perf --version' to test."
-                return 0
-            else
-                echo "[WARN] Failed to install Perf packages via apt."
-                return 1
-            fi
-
-        elif [[ $ID == "amzn" ]]; then
-            echo "[INFO] Installing Perf on Amazon Linux..."
-            # AL2023 uses dnf; AL2 uses yum. Package name is 'perf'.
-            if command -v dnf >/dev/null 2>&1; then
-                if sudo dnf install -y perf; then
-                    echo "[INFO] Perf installation complete. Run 'perf --version' to test."
-                    return 0
-                else
-                    echo "[WARN] 'dnf install perf' failed on Amazon Linux."
-                    return 1
-                fi
-            else
-                if sudo yum install -y perf; then
-                    echo "[INFO] Perf installation complete. Run 'perf --version' to test."
-                    return 0
-                else
-                    echo "[WARN] 'yum install perf' failed on Amazon Linux."
-                    return 1
-                fi
-            fi
-
-        elif [[ $ID == "fedora" || $ID == "rhel" || $ID == "centos" ]]; then
-            echo "[INFO] Installing Perf with dnf/yum..."
-            if sudo dnf install -y perf 2>/dev/null || sudo yum install -y perf 2>/dev/null; then
-                echo "[INFO] Perf installation complete. Run 'perf --help' to test."
-                return 0
-            else
-                echo "[WARN] Failed to install Perf package."
-                return 1
-            fi
-
-        else
-            echo "[WARN] Unsupported OS: $ID. Skipping Perf installation."
-            return 1
-        fi
-    else
-        echo "[WARN] Cannot detect OS. Skipping Perf installation."
-        return 1
+# --- utility: choose a real perf binary on disk (resolve symlinks, pick newest) ---
+pick_real_perf() {
+  # 1) search linux-tools trees (Ubuntu/Debian layout)
+  local cand real
+  local list=""
+  # shellcheck disable=SC2010
+  list="$(ls -1 /usr/lib/linux-tools-*/perf /usr/lib/linux-tools/*/perf 2>/dev/null || true)"
+  if [ -n "${list}" ]; then
+    real="$(
+      # resolve to real file and pick newest
+      while read -r f; do [ -n "$f" ] && readlink -f "$f"; done <<<"${list}" \
+      | awk 'NF' | sort -uV | tail -n1
+    )"
+    if [ -n "$real" ] && [ -x "$real" ]; then
+      printf '%s' "$real"
+      return 0
     fi
+  fi
+
+  # 2) Fedora/RHEL/AL: /usr/bin/perf is usually an ELF binary (not a wrapper)
+  if [ -x /usr/bin/perf ]; then
+    # detect ELF (avoid Ubuntu’s shell wrapper)
+    if head -c4 /usr/bin/perf 2>/dev/null | grep -q $'\x7fELF'; then
+      printf '%s' "/usr/bin/perf"
+      return 0
+    fi
+  fi
+
+  # 3) nothing found
+  return 1
 }
 
-# Attempt to install Perf, but don't fail if it doesn't work
-if install_perf; then
-    echo "[INFO] Perf successfully installed."
-else
-    echo "[WARN] Perf installation skipped or failed. The tool may not be available."
-    echo "[INFO] You can try installing Perf manually later if needed."
-fi
+# --- wire Ubuntu wrapper to a real perf helper; avoid loops ---
+wire_ubuntu_wrapper() {
+  local kver base real
+  kver="$(uname -r)"          # e.g. 6.14.0-1011-aws
+  base="${kver%-aws}"         # e.g. 6.14.0-1011
 
-# Always exit successfully to allow the main installation to continue
+  # Clean any previous loops or stale links/alternatives
+  update-alternatives --remove-all perf 2>/dev/null || true
+  rm -f  "/usr/local/bin/perf" \
+        "/usr/lib/linux-tools-${kver}/perf" \
+        "/usr/lib/linux-tools/${kver}/perf" || true
+
+  real="$(pick_real_perf || true)"
+
+  if [ -z "${real:-}" ]; then
+    warn "No real perf helper found on disk; trying more packages…"
+    apt-get update -y
+    # try the common combos; ignore failures
+    DEBIAN_FRONTEND=noninteractive apt-get install -y \
+      linux-tools-common linux-tools-generic \
+      "linux-tools-${kver}" "linux-cloud-tools-${kver}" \
+      "linux-tools-${base}" "linux-cloud-tools-${base}" \
+      linux-tools-aws linux-cloud-tools-aws || true
+    real="$(pick_real_perf || true)"
+  fi
+
+  if [ -z "${real:-}" ]; then
+    warn "Could not locate any usable perf helper after package installs."
+    return 1
+  fi
+
+  # Create exactly the paths the Ubuntu wrapper checks, but point them at the *real* helper
+  mkdir -p "/usr/lib/linux-tools-${kver}" "/usr/lib/linux-tools/${kver}"
+  ln -s "${real}" "/usr/lib/linux-tools-${kver}/perf"
+  ln -s "${real}" "/usr/lib/linux-tools/${kver}/perf"
+  # Also place a convenience shim first on PATH for many shells
+  ln -s "${real}" "/usr/local/bin/perf"
+
+  # If /usr/bin/perf is managed by alternatives, wire it too; otherwise leave wrapper file intact.
+  if [ -L /usr/bin/perf ]; then
+    update-alternatives --install /usr/bin/perf perf "/usr/lib/linux-tools-${kver}/perf" 100 || true
+    update-alternatives --set perf "/usr/lib/linux-tools-${kver}/perf" || true
+  fi
+
+  hash -r || true
+  info "Wired perf helper for ${kver} -> $(/usr/local/bin/perf --version 2>/dev/null || echo "${real}")"
+}
+
+install_ubuntu() {
+  local kver base
+  kver="$(uname -r)"
+  base="${kver%-aws}"
+
+  info "Installing perf packages via apt (kernel: ${kver})…"
+  apt-get update -y
+  DEBIAN_FRONTEND=noninteractive apt-get install -y \
+    linux-tools-common linux-tools-generic \
+    "linux-tools-${kver}" "linux-cloud-tools-${kver}" || true
+
+  # Extra tries that often help on cloud images:
+  DEBIAN_FRONTEND=noninteractive apt-get install -y \
+    "linux-tools-${base}" "linux-cloud-tools-${base}" \
+    linux-tools-aws linux-cloud-tools-aws || true
+
+  wire_ubuntu_wrapper || true
+}
+
+install_rpm_family() {
+  # Amazon Linux 2023/2, RHEL, Fedora
+  if command -v dnf >/dev/null 2>&1; then
+    info "Installing perf via dnf…"
+    dnf install -y perf || true
+  else
+    info "Installing perf via yum…"
+    yum install -y perf || true
+  fi
+
+  # On RPM distros, /usr/bin/perf is an ELF binary already; nothing to wire.
+  if ! command -v perf >/dev/null 2>&1; then
+    warn "perf binary not found after install; check repos on this image."
+  fi
+}
+
+tune_sysctl() {
+  [ "${PERF_TUNE_SYSCTL}" = "1" ] || { info "Skipping sysctl tuning (PERF_TUNE_SYSCTL=0)."; return 0; }
+
+  info "Setting persistent sysctl for perf (paranoid=2, kptr_restrict=0)…"
+  cat >/etc/sysctl.d/99-perf.conf <<'EOF'
+# Managed by arm-linux-migration-tools
+kernel.perf_event_paranoid = 2
+kernel.kptr_restrict = 0
+EOF
+  sysctl --system >/dev/null || true
+}
+
+main() {
+  if [ "$(id -u)" -ne 0 ]; then
+    if command -v sudo >/dev/null 2>&1; then exec sudo -E -- "$0" "$@"; else
+      echo "[ERROR] Must run as root." >&2; exit 1; fi
+  fi
+
+  if [ -f /etc/os-release ]; then . /etc/os-release; else ID=""; fi
+
+  case "${ID:-}" in
+    ubuntu|debian) install_ubuntu ;;
+    amzn|rhel|centos|fedora) install_rpm_family ;;
+    *) warn "Unsupported OS ID '${ID:-unknown}'. Attempting Ubuntu path…"; install_ubuntu || true ;;
+  esac
+
+  # Final sanity & message
+  if perf --version >/dev/null 2>&1; then
+    info "perf ready: $(perf --version)"
+  else
+    # Try the real helper directly if wrapper still warns (Ubuntu)
+    if [ -x "/usr/lib/linux-tools-$(uname -r)/perf" ]; then
+      info "perf helper: $(/usr/lib/linux-tools-$(uname -r)/perf --version 2>/dev/null || echo present)"
+    else
+      warn "perf still not available on PATH; wrapper may be present but unwired."
+    fi
+  fi
+
+  tune_sysctl
+
+  # Quick smoke (as root this should run even if paranoid>2, but sysctl above makes it easy)
+  ( perf stat -e task-clock sleep 0.1 >/dev/null 2>&1 && info "perf stat smoke: OK" ) || \
+    warn "perf stat smoke failed (consider checking kernel.perf_event_paranoid)."
+}
+
+main "$@"
 exit 0
