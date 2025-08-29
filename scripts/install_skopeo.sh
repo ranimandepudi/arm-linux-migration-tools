@@ -9,11 +9,18 @@ if [ -f /etc/os-release ]; then
         echo "[INFO] Installing Skopeo with apt..."
         sudo apt-get update
         sudo apt-get install -y skopeo
+
+    elif [[ $ID == "amzn" ]]; then
+        # Temporary decision: skip Skopeo on Amazon Linux; continue without failing
+        echo "[WARN] Amazon Linux detected (amzn). Skipping Skopeo install for now."
+        exit 0
+
     elif [[ $ID == "fedora" || $ID == "rhel" || $ID == "centos" ]]; then
         echo "[INFO] Installing Skopeo with yum..."
         sudo yum install -y skopeo || sudo dnf install -y skopeo
+
     else
-        echo "[ERROR] Unsupported OS: $ID. Please install Skopeo manually."
+        echo "[WARN] Unsupported OS: $ID. Please install Skopeo manually."
         exit 1
     fi
 else

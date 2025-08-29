@@ -9,8 +9,25 @@ The Arm Linux Migration Tools package simplifies the process of migrating applic
 ## System Requirements
 
 - **Architecture**: Arm (aarch64)
-- **Operating System**: Linux (Ubuntu 22.04/24.04 recommended)
-- **Dependencies**: Python 3, build tools, and package manager (apt/yum/dnf)
+- **Operating System**: Linux (Ubuntu 22.04/24.04 recommended), Amazon Linux 2023
+- **Dependencies**: 
+  - Python 3 (≥3.10 recommended; required for running **Porting Advisor**)
+  - Build tools (e.g. gcc, g++, make) 
+  - Package manager (apt/yum/dnf)
+
+## Tool Notes
+
+- **Skopeo**:  
+  - On Ubuntu, installed natively via `apt`.  
+  - On Amazon Linux 2023, Skopeo is **not available in default repos**.  
+    - You can run it via the provided **container wrapper** (`skopeo-container`)  
+    - Or build it manually from source / use GitHub release binaries.  
+
+- **Porting Advisor**:  
+  - Installs successfully on both Ubuntu and Amazon Linux.  
+  - Requires **Python ≥3.10** to run.  
+  - Ubuntu 22.04/24.04 meet this requirement.  
+  - Amazon Linux 2023 defaults to Python 3.9 → binary installs but won’t run unless Python is upgraded.
 
 ## Quick Start
 
@@ -64,12 +81,21 @@ You can uninstall by running:
 ```bash
 /opt/arm-migration-tools/scripts/uninstall.sh
 ```
+**Note** 
+The uninstall script:
+- Removes `/opt/arm-migration-tools`  
+- Removes wrappers in `/usr/local/bin`  
+- Removes system packages (perf, llvm-mca, skopeo) where installed  
 
 You can also download and run the uninstall:
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/arm/arm-linux-migration-tools/main/scripts/uninstall.sh | bash
 ```
+
+**Note:** Both install and uninstall scripts are **idempotent**.  
+- Running `install.sh` again will detect already-installed tools and skip re-installation.  
+- Running `uninstall.sh` again will simply confirm that everything is already removed.
 
 This package includes 13 essential migration and analysis tools:
 
