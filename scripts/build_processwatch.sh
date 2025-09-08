@@ -1,9 +1,14 @@
 #!/bin/bash
-# Build script for Process Watch (Ubuntu, Amazon Linux 2/2023)
+# Build script for Process Watch (Ubuntu / Debian / Amazon Linux / RHEL-family)
+# - Builds under /opt/arm-migration-tools/processwatch
+# - Stages the binary back into the repo root at ./processwatch/processwatch
 set -euo pipefail
 
 INSTALL_PREFIX="/opt/arm-migration-tools"
 SRC_DIR="$INSTALL_PREFIX/processwatch"
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+STAGE_DIR="$REPO_ROOT/processwatch"
+STAGED_BIN="$STAGE_DIR/processwatch"
 
 detect_pkg_mgr() {
   if command -v apt-get >/dev/null 2>&1; then
@@ -35,28 +40,36 @@ install_deps() {
   esac
 }
 
+echo "[INFO] Installing build prerequisites for Process Watch..."
 install_deps
 
+echo "[INFO] Preparing source at $SRC_DIR ..."
 sudo mkdir -p "$INSTALL_PREFIX"
-cd "$INSTALL_PREFIX"
-
-# Clone if missing
-if [ ! -d "$SRC_DIR" ]; then
-  git clone --recursive https://github.com/intel/processwatch.git "$SRC_DIR"
+if [ ! -d "$SRC_DIR/.git" ]; then
+  sudo rm -rf "$SRC_DIR"
+  sudo git clone --recursive https://github.com/intel/processwatch.git "$SRC_DIR"
 else
-  # Refresh source if already present
-  git -C "$SRC_DIR" fetch --all --tags || true
-  git -C "$SRC_DIR" submodule update --init --recursive || true
+  sudo git -C "$SRC_DIR" fetch --all --tags || true
+  sudo git -C "$SRC_DIR" submodule update --init --recursive || true
 fi
+sudo chown -R "$(id -u):$(id -g)" "$SRC_DIR"
 
-# Build
+echo "[INFO] Building Process Watch..."
 cd "$SRC_DIR"
+if [ ! -x ./build.sh ]; then
+  echo "[ERROR] Upstream build.sh not found or not executable at $SRC_DIR/build.sh" >&2
+  exit 1
+fi
 ./build.sh
 
-# Verify binary
 if [ ! -x "$SRC_DIR/processwatch" ]; then
   echo "[ERROR] Process Watch build did not produce a binary at $SRC_DIR/processwatch" >&2
   exit 1
 fi
 
-echo "[INFO] Process Watch build complete: $SRC_DIR/processwatch"
+mkdir -p "$STAGE_DIR"
+cp -f "$SRC_DIR/processwatch" "$STAGED_BIN"
+chmod +x "$STAGED_BIN"
+
+echo "[INFO] Process Watch built at: $SRC_DIR/processwatch"
+echo "[INFO] Staged for packaging at: $STAGED_BIN"

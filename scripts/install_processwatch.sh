@@ -10,7 +10,6 @@ ensure_built() {
   if [ -x "$PW_SRC" ]; then
     return
   fi
-  # Try to build
   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   if [ ! -x "$SCRIPT_DIR/build_processwatch.sh" ]; then
     echo "[ERROR] $SCRIPT_DIR/build_processwatch.sh not found or not executable." >&2
@@ -27,4 +26,8 @@ ensure_built
 sudo chmod +x "$PW_SRC"
 sudo ln -sf "$PW_SRC" "$PW_WRAPPER"
 
-echo "[INFO] Process Watch installed. Run 'processwatch -h' to test."
+if "$PW_SRC" --help >/dev/null 2>&1; then
+  echo "[INFO] Process Watch installed. Run 'processwatch --help' to test."
+else
+  echo "[WARN] Process Watch binary present but '--help' failed. May require root or kernel features."
+fi
