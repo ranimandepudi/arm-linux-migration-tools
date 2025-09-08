@@ -505,13 +505,25 @@ summary_check() {
     echo "$name: SKIPPED"
   fi
 }
+summary_perf() {
+  if command -v perf >/dev/null 2>&1; then
+    if perf stat -e task-clock sleep 0.1 >/dev/null 2>&1; then
+      echo "perf: OK ($(perf --version 2>&1 | head -n1))"
+    else
+      echo "perf: FAIL (binary found but counters unavailable; check kernel/perms)"
+    fi
+  else
+    # Common when running inside Docker-on-mac/Colima (XNU host kernel)
+    echo "perf: SKIPPED (unsupported kernel or not installed)"
+  fi
+}
 
 summary_check "sysreport" sysreport
 summary_check "kubearchinspect" kubearchinspect
 summary_check "migrate-ease-cpp" migrate-ease-cpp
 summary_check "aperf" aperf
 summary_check "llvm-bolt" llvm-bolt
-summary_check "perf" perf
+summary_perf
 summary_check "llvm-mca" llvm-mca
 summary_check "papi" papi_avail
 summary_check "processwatch" processwatch

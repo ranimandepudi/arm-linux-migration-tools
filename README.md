@@ -9,11 +9,14 @@ The Arm Linux Migration Tools package simplifies the process of migrating applic
 ## System Requirements
 
 - **Architecture**: Arm (aarch64)
-- **Operating System**: Linux (Ubuntu 22.04/24.04 recommended), Amazon Linux 2023
+- **Operating System**: Linux (Ubuntu 22.04/24.04 recommended), Amazon Linux 2023, macOS users can test inside Colima/Docker (limitations). 
+    - Note (macOS/Colima): perf relies on Linux kernel PMU support and is not supported on macOS/Colima (XNU kernel). The test script will mark it as SKIPPED in these environments.
+
 - **Dependencies**: 
   - Python 3 (≥3.10 recommended; required for running **Porting Advisor**)
   - Build tools (e.g. gcc, g++, make) 
   - Package manager (apt/yum/dnf)
+  - Docker/Podman (required for migrate-ease-docker)
 
 ## Tool Notes
 
@@ -22,6 +25,46 @@ The Arm Linux Migration Tools package simplifies the process of migrating applic
   - On Amazon Linux 2023, Skopeo is **not available in default repos**.  
     - You can run it via the provided **container wrapper** (`skopeo-container`)  
     - Or build it manually from source / use GitHub release binaries.  
+
+- **Migrate-Ease**:
+  - Five language wrappers (cpp,python,go,js,java) always install.
+  - The Docker wrapper installs only if Docker/Podman is detected.
+  - On systems without a container runtime, migrate-ease-docker is skipped.
+  
+  - **CLI vs upstream (Migrate-Ease)**:
+
+  The upstream [migrate-ease](https://github.com/migrate-ease/migrate-ease) README shows usage as:
+    ```bash 
+    python3 -m {scanner_name} --march {arch} {scan_path}
+    ```
+
+    In this package we provide unified wrappers (`migrate-ease-cpp`, `migrate-ease-python`, etc.) in `/usr/local/bin`.
+    This ensures consistent CLI names across all supported languages and avoids requiring users to `cd` into the
+    package or call `python3 -m` directly. 
+
+    The upstream docs use:
+
+    ```bash 
+    python3 -m {scanner_name} --march {arch} {scan_path}
+      # e.g. python3 -m cpp --march armv8-a ./myproject
+    ```
+    This package installs unified wrappers to /usr/local/bin:
+    ```bash
+    migrate-ease-cpp --march armv8-a ./myproject
+    migrate-ease-python --march armv8-a ./myproject
+    migrate-ease-go --march armv8-a ./myproject
+    migrate-ease-js --march armv8-a ./myproject
+    migrate-ease-java --march armv8-a ./myproject
+    ```
+
+  Why: consistent command names across languages, no python3 -m …, and wrappers auto-use the venv.
+
+
+- **Perf**
+  - On cloud VMs (AWS,GCP,Azure) with Ubuntu/Amazon Linux, perf installs normally with kernel-matching packages.
+  - On macOS Colima or other Docker-on-mac setups, perf will show as SKIPPED in the test script because the underlying XNU kernel doesn't support Linux perf.
+  - The test script will report Perf: SKIP (binary present but counters unsupported on this kernel) when running inside mac/Colima or similarly restricted kernels
+
 
 - **Porting Advisor**:  
   - Installs successfully on both Ubuntu and Amazon Linux.  
@@ -174,7 +217,15 @@ After installation, verify all tools are working correctly:
 arm-migration-tools-test.sh
 ```
 
-This will test each tool by running its help command and log the results to `arm-migration-tools-test.log`.
+This script writes:
+  - arm-migration-tools-test.log - full human readable output
+  - arm-migration-tools-test.summary.tsv – a 3-column summary: tool / status / note
+
+Statuses:
+	•	PASS – tool is present and the smoke test succeeded
+	•	SKIP – intentionally not tested on this system (e.g., perf on mac/Colima; migrate-ease-docker without Docker/Podman)
+	•	FAIL – tool found but the smoke test failed (check the log for details)
+
 
 ### Individual Tool Testing
 
@@ -294,6 +345,12 @@ Each tool has its own build script in the `scripts/` directory:
 - Check if tool is in PATH: `which <tool-name>`
 - Try using the full path: `/usr/local/bin/<tool-name>`
 - Verify installation: `arm-migration-tools-test.sh`
+
+**Migrate-Ease Python ImportError: failed to find libmagic**  
+If you see this error, it means your base OS image is missing the libmagic library.  
+Normally `install.sh` installs it automatically, but if running inside a minimal container, you may need to install manually:  
+- Ubuntu/Debian: `apt-get update && apt-get install -y file libmagic1`  
+- Amazon Linux / RHEL / Fedora: `dnf install -y file-libs || yum install -y file-libs`  
 
 **Permission Errors**
 - Installation requires sudo privileges
