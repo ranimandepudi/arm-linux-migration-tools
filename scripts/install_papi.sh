@@ -12,11 +12,9 @@ if [ ! -d "$PAPI_STAGED" ]; then
 fi
 
 echo "[INFO] Installing PAPI to /usr/local..."
+sudo mkdir -p /usr/local
 sudo cp -r "$PAPI_STAGED"/* /usr/local/
 
-# Optionally, add PAPI version to tool-versions.txt if run from main install.sh
-if [ -f "$PAPI_STAGED/PAPI.version" ]; then
-  echo "PAPI: $(cat "$PAPI_STAGED/PAPI.version")" | sudo tee -a "$INSTALL_PREFIX/tool-versions.txt" > /dev/null
-fi
+command -v papi_avail >/dev/null 2>&1 && papi_avail >/dev/null 2>&1 || true
 
 echo "[INFO] PAPI installed. Run 'papi_avail' to test."

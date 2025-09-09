@@ -11,11 +11,15 @@ if [ ! -f "$KAI_BIN" ]; then
   exit 1
 fi
 
+sudo chmod +x "$KAI_BIN"
+
 # Create wrapper in /usr/local/bin
-cat << EOF | sudo tee $KAI_WRAPPER > /dev/null
+cat << EOF | sudo tee "$KAI_WRAPPER" > /dev/null
 #!/bin/bash
-exec $KAI_BIN "\$@"
+exec "$KAI_BIN" "\$@"
 EOF
-sudo chmod +x $KAI_WRAPPER
+sudo chmod +x "$KAI_WRAPPER"
+
+"$KAI_WRAPPER" version >/dev/null 2>&1 || true
 
 echo "[INFO] KubeArchInspect installed. Run 'kubearchinspect --help' to test."

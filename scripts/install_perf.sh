@@ -11,56 +11,41 @@ warn(){ log "[WARN] $*"; }
 
 PERF_TUNE_SYSCTL="${PERF_TUNE_SYSCTL:-1}"   # set to 0 to skip sysctl tuning
 
-# --- utility: choose a real perf binary on disk (resolve symlinks, pick newest) ---
+# choose a real perf binary on disk (resolve symlinks, pick newest)
 pick_real_perf() {
-  # 1) search linux-tools trees (Ubuntu/Debian layout)
-  local cand real
-  local list=""
-  # shellcheck disable=SC2010
+  local list real
   list="$(ls -1 /usr/lib/linux-tools-*/perf /usr/lib/linux-tools/*/perf 2>/dev/null || true)"
   if [ -n "${list}" ]; then
     real="$(
-      # resolve to real file and pick newest
       while read -r f; do [ -n "$f" ] && readlink -f "$f"; done <<<"${list}" \
       | awk 'NF' | sort -uV | tail -n1
     )"
-    if [ -n "$real" ] && [ -x "$real" ]; then
-      printf '%s' "$real"
-      return 0
+    if [ -n "${real}" ] && [ -x "${real}" ]; then
+      printf '%s' "$real"; return 0
     fi
   fi
-
-  # 2) Fedora/RHEL/AL: /usr/bin/perf is usually an ELF binary (not a wrapper)
   if [ -x /usr/bin/perf ]; then
-    # detect ELF (avoid Ubuntu’s shell wrapper)
     if head -c4 /usr/bin/perf 2>/dev/null | grep -q $'\x7fELF'; then
-      printf '%s' "/usr/bin/perf"
-      return 0
+      printf '%s' "/usr/bin/perf"; return 0
     fi
   fi
-
-  # 3) nothing found
   return 1
 }
 
-# --- wire Ubuntu wrapper to a real perf helper; avoid loops ---
 wire_ubuntu_wrapper() {
   local kver base real
-  kver="$(uname -r)"          # e.g. 6.14.0-1011-aws
-  base="${kver%-aws}"         # e.g. 6.14.0-1011
+  kver="$(uname -r)"
+  base="${kver%-aws}"
 
-  # Clean any previous loops or stale links/alternatives
   update-alternatives --remove-all perf 2>/dev/null || true
-  rm -f  "/usr/local/bin/perf" \
-        "/usr/lib/linux-tools-${kver}/perf" \
-        "/usr/lib/linux-tools/${kver}/perf" || true
+  [ -L "/usr/local/bin/perf" ] && rm -f "/usr/local/bin/perf"
+  [ -L "/usr/lib/linux-tools-${kver}/perf" ] && rm -f "/usr/lib/linux-tools-${kver}/perf"
+  [ -L "/usr/lib/linux-tools/${kver}/perf" ] && rm -f "/usr/lib/linux-tools/${kver}/perf"
 
   real="$(pick_real_perf || true)"
-
   if [ -z "${real:-}" ]; then
     warn "No real perf helper found on disk; trying more packages…"
     apt-get update -y
-    # try the common combos; ignore failures
     DEBIAN_FRONTEND=noninteractive apt-get install -y \
       linux-tools-common linux-tools-generic \
       "linux-tools-${kver}" "linux-cloud-tools-${kver}" \
@@ -68,20 +53,16 @@ wire_ubuntu_wrapper() {
       linux-tools-aws linux-cloud-tools-aws || true
     real="$(pick_real_perf || true)"
   fi
-
   if [ -z "${real:-}" ]; then
     warn "Could not locate any usable perf helper after package installs."
     return 1
   fi
 
-  # Create exactly the paths the Ubuntu wrapper checks, but point them at the *real* helper
   mkdir -p "/usr/lib/linux-tools-${kver}" "/usr/lib/linux-tools/${kver}"
   ln -s "${real}" "/usr/lib/linux-tools-${kver}/perf"
   ln -s "${real}" "/usr/lib/linux-tools/${kver}/perf"
-  # Also place a convenience shim first on PATH for many shells
   ln -s "${real}" "/usr/local/bin/perf"
 
-  # If /usr/bin/perf is managed by alternatives, wire it too; otherwise leave wrapper file intact.
   if [ -L /usr/bin/perf ]; then
     update-alternatives --install /usr/bin/perf perf "/usr/lib/linux-tools-${kver}/perf" 100 || true
     update-alternatives --set perf "/usr/lib/linux-tools-${kver}/perf" || true
@@ -102,7 +83,6 @@ install_ubuntu() {
     linux-tools-common linux-tools-generic \
     "linux-tools-${kver}" "linux-cloud-tools-${kver}" || true
 
-  # Extra tries that often help on cloud images:
   DEBIAN_FRONTEND=noninteractive apt-get install -y \
     "linux-tools-${base}" "linux-cloud-tools-${base}" \
     linux-tools-aws linux-cloud-tools-aws || true
@@ -111,16 +91,13 @@ install_ubuntu() {
 }
 
 install_rpm_family() {
-  # Amazon Linux 2023/2, RHEL, Fedora
   if command -v dnf >/dev/null 2>&1; then
     info "Installing perf via dnf…"
     dnf install -y perf || true
   else
     info "Installing perf via yum…"
     yum install -y perf || true
-  fi
-
-  # On RPM distros, /usr/bin/perf is an ELF binary already; nothing to wire.
+  fi  
   if ! command -v perf >/dev/null 2>&1; then
     warn "perf binary not found after install; check repos on this image."
   fi
@@ -128,7 +105,6 @@ install_rpm_family() {
 
 tune_sysctl() {
   [ "${PERF_TUNE_SYSCTL}" = "1" ] || { info "Skipping sysctl tuning (PERF_TUNE_SYSCTL=0)."; return 0; }
-
   info "Setting persistent sysctl for perf (paranoid=2, kptr_restrict=0)…"
   cat >/etc/sysctl.d/99-perf.conf <<'EOF'
 # Managed by arm-linux-migration-tools
@@ -152,11 +128,9 @@ main() {
     *) warn "Unsupported OS ID '${ID:-unknown}'. Attempting Ubuntu path…"; install_ubuntu || true ;;
   esac
 
-  # Final sanity & message
   if perf --version >/dev/null 2>&1; then
     info "perf ready: $(perf --version)"
   else
-    # Try the real helper directly if wrapper still warns (Ubuntu)
     if [ -x "/usr/lib/linux-tools-$(uname -r)/perf" ]; then
       info "perf helper: $(/usr/lib/linux-tools-$(uname -r)/perf --version 2>/dev/null || echo present)"
     else
@@ -166,7 +140,6 @@ main() {
 
   tune_sysctl
 
-  # Quick smoke (as root this should run even if paranoid>2, but sysctl above makes it easy)
   ( perf stat -e task-clock sleep 0.1 >/dev/null 2>&1 && info "perf stat smoke: OK" ) || \
     warn "perf stat smoke failed (consider checking kernel.perf_event_paranoid)."
 }

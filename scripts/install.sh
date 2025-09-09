@@ -3,6 +3,10 @@
 # Supports both local installation (with tarball) and remote installation (via curl)
 set -e
 
+# keep it in AMT_VERSION; then clear VERSION so OS sourcing can't overwrite.
+AMT_VERSION="${VERSION:-}"
+unset VERSION
+
 # Require root; auto-escalate if possible
 if [ "$EUID" -ne 0 ]; then
   if command -v sudo >/dev/null 2>&1; then
@@ -27,10 +31,7 @@ flock -n 200 || {
   echo "[ERROR] Another install.sh is already running. Exiting."
   exit 1
 }
-# ------------------------------
-# Cross-distro dependency install
-# Supports: Ubuntu (apt), Amazon Linux 2023 (dnf), Amazon Linux 2 (yum)
-# ------------------------------
+
 detect_pkg_mgr() {
   if command -v apt-get >/dev/null 2>&1; then
     PKG_MGR="apt"
@@ -57,7 +58,7 @@ ensure_deps() {
       sudo apt-get install -y "${COMMON_PKGS[@]}" "${APT_PKGS[@]}"
       ;;
     dnf|yum)
-      # gcc/g++/make ≈ build-essential
+      # gcc/g++/make build-essential
       YUM_PKGS=(gcc gcc-c++ make)
       echo "[INFO] Installing prerequisites via $PKG_MGR..."
       # If curl-minimal already exists, don't try to install curl
@@ -65,7 +66,6 @@ ensure_deps() {
         echo "[INFO] curl-minimal present, skipping curl package."
         COMMON_PKGS=(wget git python3 python3-pip)
       fi
-
       sudo $PKG_MGR -y install "${COMMON_PKGS[@]}" "${YUM_PKGS[@]}"
       sudo $PKG_MGR -y install python3-venv 2>/dev/null || true
       sudo $PKG_MGR -y install python3-virtualenv 2>/dev/null || true
@@ -77,12 +77,81 @@ ensure_deps() {
     exit 1
   fi
 }
+ensure_core_runtime() {
+  if [ -f /etc/os-release ]; then 
+    . /etc/os-release
+  fi
+  case "${ID:-}" in
+    ubuntu|debian)
+      sudo apt-get update -y
+      sudo apt-get install -y --no-install-recommends \
+        ca-certificates file tar xz-utils unzip jq procps || true
+      ;;
+    amzn|rhel|centos|fedora)
+      if command -v dnf >/dev/null 2>&1; then
+        sudo dnf -y install ca-certificates file tar xz unzip jq procps-ng || true
+      else
+        sudo yum -y install ca-certificates file tar xz unzip jq procps-ng || true
+      fi
+      ;;
+  esac
+}
 
+# Best-effort runtime dep for migrate-ease-python (python-magic > libmagic)
+ensure_libmagic() {
+  if [ -f /etc/os-release ]; then
+    . /etc/os-release
+    case "$ID" in
+      ubuntu|debian)
+        sudo apt-get update -y
+        sudo apt-get install -y --no-install-recommends file libmagic1 || true
+        ;;
+      amzn|rhel|centos|fedora)
+        if command -v dnf >/dev/null 2>&1; then
+          sudo dnf -y install file-libs || true
+        else
+          sudo yum -y install file-libs || true
+        fi
+        ;;
+      *) : ;;
+    esac
+  fi
+}
+# Optional container runtime installer
+# Controlled via INSTALL_CONTAINER_RUNTIME=1
+
+maybe_install_container_runtime() {
+  if [ "${INSTALL_CONTAINER_RUNTIME:-0}" = "1" ]; then
+    echo "[INFO] INSTALL_CONTAINER_RUNTIME=1 set, attempting to install Docker/Podman..."
+    if [ -f /etc/os-release ]; then
+      . /etc/os-release
+      case "$ID" in
+        ubuntu|debian)
+          sudo apt-get update -y
+          sudo apt-get install -y docker.io || sudo apt-get install -y podman || true
+          ;;
+        amzn|rhel|centos|fedora)
+          if command -v dnf >/dev/null 2>&1; then
+            sudo dnf -y install docker moby-engine || sudo dnf -y install podman || true
+          else
+            sudo yum -y install docker || sudo yum -y install podman || true
+          fi
+          ;;
+        *)
+          echo "[WARN] Unsupported OS for automatic Docker install; please install manually."
+          ;;
+      esac
+    fi
+  else
+    echo "[INFO] INSTALL_CONTAINER_RUNTIME not set; skipping runtime install."
+  fi
+}
 INSTALL_PREFIX="/opt/arm-migration-tools"
 GITHUB_REPO="arm/arm-linux-migration-tools"
 STAMP_FILE="$INSTALL_PREFIX/.installed_version"
 
 ensure_deps
+ensure_core_runtime
 
 # Detect if this is a remote installation (no local tarball files)
 REMOTE_INSTALL=false
@@ -91,72 +160,55 @@ if [ ! -f "$(dirname "$0")/../README.md" ] && [ -z "$(ls arm-migration-tools-v*.
 fi
 
 # Handle remote installation
-
 if [ "$REMOTE_INSTALL" = true ]; then
   echo "[INFO] Remote installation detected. Downloading latest release..."
-
-  # Check for required tools
   if ! command -v curl >/dev/null 2>&1; then
     echo "[ERROR] curl is required for remote installation but not found." >&2
     exit 1
   fi
-
-  # Fetch latest release information
   LATEST_RELEASE_URL="https://api.github.com/repos/$GITHUB_REPO/releases/latest"
   echo "[INFO] Fetching latest release information..."
-
   LATEST_TAG=$(curl -s "$LATEST_RELEASE_URL" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' | tr -d 'v')
   if [ -z "$LATEST_TAG" ]; then
     echo "[ERROR] Failed to fetch latest release tag" >&2
     exit 1
   fi
 
-  VERSION="$LATEST_TAG"
-  if [ -f "$STAMP_FILE" ] && [ "$(cat "$STAMP_FILE")" = "$VERSION" ]; then
-    echo "[INFO] arm-migration-tools v$VERSION already installed at $INSTALL_PREFIX, skipping download/extract."
+  AMT_VERSION="$LATEST_TAG"
+  if [ -f "$STAMP_FILE" ] && [ "$(cat "$STAMP_FILE")" = "$AMT_VERSION" ]; then
+    echo "[INFO] arm-migration-tools v$AMT_VERSION already installed at $INSTALL_PREFIX, skipping download/extract."
     SCRIPTS_DIR="$INSTALL_PREFIX/scripts"
   else
     DOWNLOAD_URL="https://github.com/$GITHUB_REPO/releases/download/v$LATEST_TAG/arm-migration-tools-v$LATEST_TAG.tar.gz"
     echo "[INFO] Downloading version v$LATEST_TAG from $DOWNLOAD_URL..."
 
-    # Create temporary directory and download
     TEMP_DIR=$(mktemp -d)
     cd "$TEMP_DIR"
-
     if ! curl -L -f -o "arm-migration-tools.tar.gz" "$DOWNLOAD_URL"; then
       echo "[ERROR] Failed to download release tarball" >&2
       exit 1
     fi
 
-    # Extract to install prefix
     echo "[INFO] Extracting to $INSTALL_PREFIX..."
     sudo mkdir -p "$INSTALL_PREFIX"
     sudo tar xzf "arm-migration-tools.tar.gz" -C "$INSTALL_PREFIX"
-    echo "$VERSION" | sudo tee "$STAMP_FILE" >/dev/null   # record the installed version
-
-    # Change to the extracted scripts directory
+    echo "$AMT_VERSION" | sudo tee "$STAMP_FILE" >/dev/null
     SCRIPTS_DIR="$INSTALL_PREFIX/scripts"
-
-    # Clean up temp directory
     cd /
     rm -rf "$TEMP_DIR"
   fi
-
 else
-  # Handle local installation
   echo "[INFO] Local installation detected."
-  
-  # Set the version here (default to newest if not set)
-  if [ -z "$VERSION" ]; then
+  if [ -z "${AMT_VERSION:-}" ]; then
     LATEST_TAR=$(ls arm-migration-tools-v*.tar.gz 2>/dev/null | sort -V | tail -n 1)
     if [ -z "$LATEST_TAR" ]; then
       echo "[ERROR] No arm-migration-tools-v*.tar.gz files found." >&2
       exit 1
     fi
     TAR_FILE="$LATEST_TAR"
-    VERSION=$(echo "$TAR_FILE" | sed -E 's/.*-v([0-9]+)\.tar\.gz/\1/')
+    AMT_VERSION=$(echo "$TAR_FILE" | sed -E 's/.*-v([0-9]+)\.tar\.gz/\1/')
   else
-    TAR_FILE="arm-migration-tools-v$VERSION.tar.gz"
+    TAR_FILE="arm-migration-tools-v$AMT_VERSION.tar.gz"
   fi
 
   if [ ! -f "$TAR_FILE" ]; then
@@ -164,25 +216,71 @@ else
     exit 1
   fi
 
-  if [ -f "$STAMP_FILE" ] && [ "$(cat "$STAMP_FILE")" = "$VERSION" ]; then
-    echo "[INFO] arm-migration-tools v$VERSION already installed at $INSTALL_PREFIX, skipping extract."
+  if [ -f "$STAMP_FILE" ] && [ "$(cat "$STAMP_FILE")" = "$AMT_VERSION" ]; then
+    echo "[INFO] arm-migration-tools v$AMT_VERSION already installed at $INSTALL_PREFIX, skipping extract."
   else
     echo "[INFO] Extracting $TAR_FILE to $INSTALL_PREFIX..."
     sudo mkdir -p "$INSTALL_PREFIX"
     sudo tar xzf "$TAR_FILE" -C "$INSTALL_PREFIX"
-    echo "$VERSION" | sudo tee "$STAMP_FILE" >/dev/null
+    echo "$AMT_VERSION" | sudo tee "$STAMP_FILE" >/dev/null
   fi
 
-  # Use relative path for local installation
   SCRIPTS_DIR="$(dirname "$0")"
 fi
 
 # Create additional wrappers for remote installation
 if [ "$REMOTE_INSTALL" = true ]; then
-  # Install arm-migration-tools-test.sh to /usr/local/bin
   if [ -f "$INSTALL_PREFIX/scripts/arm-migration-tools-test.sh" ]; then
-      sudo cp "$INSTALL_PREFIX/scripts/arm-migration-tools-test.sh" /usr/local/bin/arm-migration-tools-test.sh
-      sudo chmod +x /usr/local/bin/arm-migration-tools-test.sh
+    sudo cp "$INSTALL_PREFIX/scripts/arm-migration-tools-test.sh" /usr/local/bin/arm-migration-tools-test.sh
+    sudo chmod +x /usr/local/bin/arm-migration-tools-test.sh
+  fi
+fi
+
+
+# Python venv early (before any wrappers that use it)
+VENV_PATH="$INSTALL_PREFIX/venv"
+PYTHON3=$(command -v python3 || true)
+if [ -z "$PYTHON3" ]; then
+  echo "[ERROR] python3 not found. Please install Python 3."
+  exit 1
+fi
+if [ ! -d "$VENV_PATH" ]; then
+  echo "[INFO] Creating Python venv at $VENV_PATH..."
+  if ! "$PYTHON3" -m venv "$VENV_PATH" 2>/dev/null; then
+    echo "[INFO] python -m venv unavailable; falling back to virtualenv..."
+    "$PYTHON3" -m pip install --upgrade pip virtualenv
+    "$PYTHON3" -m virtualenv "$VENV_PATH"
+  fi
+fi
+# Upgrade pip
+sudo "$VENV_PATH/bin/pip" install --upgrade pip
+
+# Install requirements only if requirements.txt changed
+REQ_FILE="$INSTALL_PREFIX/requirements.txt"
+REQ_HASH_FILE="$VENV_PATH/.reqs_hash"
+if [ -f "$REQ_FILE" ]; then
+  NEW_HASH=$(sha256sum "$REQ_FILE" | awk '{print $1}')
+  OLD_HASH=$(cat "$REQ_HASH_FILE" 2>/dev/null || true)
+  if [ "$NEW_HASH" != "$OLD_HASH" ]; then
+    echo "[INFO] Installing/Updating Python requirements..."
+    sudo "$VENV_PATH/bin/pip" install -r "$REQ_FILE"
+    echo "$NEW_HASH" | sudo tee "$REQ_HASH_FILE" >/dev/null
+  else
+    echo "[INFO] Python requirements already up-to-date, skipping."
+  fi
+fi
+if ! "$VENV_PATH/bin/python" -c "import requests" 2>/dev/null; then
+  echo "[INFO] Installing missing Python dependency: requests"
+  sudo "$VENV_PATH/bin/pip" install requests
+fi
+
+# Install Topdown Tool in editable mode in the venv (idempotent)
+if [ -d "$INSTALL_PREFIX/telemetry-solution/tools/topdown_tool" ]; then
+  if "$VENV_PATH/bin/python" -c "import importlib.util,sys; sys.exit(0 if importlib.util.find_spec('topdown_tool') else 1)" 2>/dev/null; then
+    echo "[INFO] topdown_tool already importable in venv, skipping -e install."
+  else
+    echo "[INFO] Installing topdown_tool into venv (-e)..."
+    sudo "$VENV_PATH/bin/pip" install -e "$INSTALL_PREFIX/telemetry-solution/tools/topdown_tool"
   fi
 fi
 
@@ -198,6 +296,7 @@ if [ -f "$SCRIPTS_DIR/install_sysreport.sh" ]; then
     bash "$SCRIPTS_DIR/install_sysreport.sh"
   fi
 fi
+
 # Install skopeo
 if [ -f "$SCRIPTS_DIR/install_skopeo.sh" ]; then
   if command -v skopeo >/dev/null 2>&1; then
@@ -218,7 +317,7 @@ if [ -f "$SCRIPTS_DIR/install_kubearchinspect.sh" ]; then
   fi
 fi
 
-# ---- Perf: always ensure it's installed & wired correctly ----
+# Perf: always ensure it's installed & wired correctly
 if [ -f "$SCRIPTS_DIR/install_perf.sh" ]; then
   echo "[INFO] Ensuring Perf is installed and wired..."
   # Tune kernel.perf_event_paranoid unless explicitly disabled by caller
@@ -275,8 +374,9 @@ if [ -f "$SCRIPTS_DIR/install_papi.sh" ]; then
   fi
 fi
 
-# Install Migrate Ease
+# Install Migrate Ease (package + wrappers)
 if [ -f "$SCRIPTS_DIR/install_migrate_ease.sh" ]; then
+  ensure_libmagic
   if python3 -c "import importlib.util,sys; sys.exit(0 if importlib.util.find_spec('migrate_ease') else 1)" 2>/dev/null; then
     echo "[INFO] Migrate Ease (Python pkg) already installed, skipping."
   else
@@ -287,7 +387,26 @@ fi
 
 # Install Migrate Ease wrappers
 if [ -f "$SCRIPTS_DIR/install_migrate_ease_wrappers.sh" ]; then
-  if command -v migrate-ease-cpp >/dev/null 2>&1; then
+  maybe_install_container_runtime
+
+  has_container="no"
+  if command -v docker >/dev/null 2>&1 || command -v podman >/dev/null 2>&1 || [ "${FORCE_DOCKER_WRAPPER:-0}" = "1" ]; then
+    has_container="yes"
+  fi
+
+  # base set everyone must have
+  base_ok=true
+  for w in migrate-ease-cpp migrate-ease-python migrate-ease-go migrate-ease-js migrate-ease-java; do
+    command -v "$w" >/dev/null 2>&1 || { base_ok=false; break; }
+  done
+
+  # docker wrapper only if runtime is present/forced
+  docker_ok=true
+  if [ "$has_container" = "yes" ]; then
+    command -v migrate-ease-docker >/dev/null 2>&1 || docker_ok=false
+  fi
+
+  if $base_ok && $docker_ok; then
     echo "[INFO] Migrate Ease wrappers already installed, skipping."
   else
     echo "[INFO] Installing Migrate Ease wrappers..."
@@ -325,57 +444,10 @@ if [ -f "$SCRIPTS_DIR/install_topdown_tool.sh" ]; then
   fi
 fi
 
-# Set up Python venv and install requirements
-VENV_PATH="$INSTALL_PREFIX/venv"
-PYTHON3=$(command -v python3)
-if [ -z "$PYTHON3" ]; then
-  echo "[ERROR] python3 not found. Please install Python 3."
-  exit 1
-fi
-if [ ! -d "$VENV_PATH" ]; then
-  echo "[INFO] Creating Python venv at $VENV_PATH..."
-  if ! "$PYTHON3" -m venv "$VENV_PATH" 2>/dev/null; then
-    echo "[INFO] python -m venv unavailable; falling back to virtualenv..."
-    "$PYTHON3" -m pip install --upgrade pip virtualenv
-    "$PYTHON3" -m virtualenv "$VENV_PATH"
-  fi
-fi
-
-
-# Upgrade pip and install requirements
-sudo "$VENV_PATH/bin/pip" install --upgrade pip
-
-# Install requirements only if requirements.txt changed
-REQ_FILE="$INSTALL_PREFIX/requirements.txt"
-REQ_HASH_FILE="$VENV_PATH/.reqs_hash"
-
-if [ -f "$REQ_FILE" ]; then
-  NEW_HASH=$(sha256sum "$REQ_FILE" | awk '{print $1}')
-  OLD_HASH=$(cat "$REQ_HASH_FILE" 2>/dev/null || true)
-
-  if [ "$NEW_HASH" != "$OLD_HASH" ]; then
-    echo "[INFO] Installing/Updating Python requirements..."
-    sudo "$VENV_PATH/bin/pip" install -r "$REQ_FILE"
-    echo "$NEW_HASH" | sudo tee "$REQ_HASH_FILE" >/dev/null
-  else
-    echo "[INFO] Python requirements already up-to-date, skipping."
-  fi
-fi
-
-# Install Topdown Tool in editable mode in the venv (idempotent)
-if [ -d "$INSTALL_PREFIX/telemetry-solution/tools/topdown_tool" ]; then
-  if "$VENV_PATH/bin/python" -c "import importlib.util,sys; sys.exit(0 if importlib.util.find_spec('topdown_tool') else 1)" 2>/dev/null; then
-    echo "[INFO] topdown_tool already importable in venv, skipping -e install."
-  else
-    echo "[INFO] Installing topdown_tool into venv (-e)..."
-    sudo "$VENV_PATH/bin/pip" install -e "$INSTALL_PREFIX/telemetry-solution/tools/topdown_tool"
-  fi
-fi
-
 # Record tool versions in a single file (after install)
 VERSIONS_FILE="$INSTALL_PREFIX/tool-versions.txt"
-echo "Sysreport: $VERSION" | sudo tee "$VERSIONS_FILE" > /dev/null
-echo "Check Image: $VERSION" | sudo tee -a "$VERSIONS_FILE" > /dev/null
+echo "Sysreport: $AMT_VERSION" | sudo tee "$VERSIONS_FILE" > /dev/null
+echo "Check Image: $AMT_VERSION" | sudo tee -a "$VERSIONS_FILE" > /dev/null
 if command -v skopeo >/dev/null 2>&1; then
   skopeo --version 2>&1 | head -n1 | awk '{print "Skopeo: "$0}' | sudo tee -a "$VERSIONS_FILE" > /dev/null
 fi
@@ -417,8 +489,7 @@ cat <<EOM
 Or use the provided wrappers in /usr/local/bin for each tool (recommended).
 EOM
 
-
-# ---- Compact install summary ----
+# INSTALL SUMMARY
 echo "[SUMMARY]"
 
 summary_check() {
@@ -427,17 +498,23 @@ summary_check() {
     case "$cmd" in
       kubearchinspect)
         echo "$name: OK (Check how ready your Kubernetes cluster is to run on Arm.)" ;;
-      porting-advisor)
-        if python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)'; then
-          echo "$name: OK ($("$cmd" --version 2>&1 | head -n1))"
-        else
-          echo "$name: INSTALLED (Python ≥3.10 required to run)"
-        fi ;;
       *)
         echo "$name: OK ($("$cmd" --version 2>&1 | head -n1 || $cmd --help 2>&1 | head -n1))" ;;
     esac
   else
     echo "$name: SKIPPED"
+  fi
+}
+summary_perf() {
+  if command -v perf >/dev/null 2>&1; then
+    if perf stat -e task-clock sleep 0.1 >/dev/null 2>&1; then
+      echo "perf: OK ($(perf --version 2>&1 | head -n1))"
+    else
+      echo "perf: FAIL (binary found but counters unavailable; check kernel/perms)"
+    fi
+  else
+    # Common when running inside Docker-on-mac/Colima (XNU host kernel)
+    echo "perf: SKIPPED (unsupported kernel or not installed)"
   fi
 }
 
@@ -446,7 +523,7 @@ summary_check "kubearchinspect" kubearchinspect
 summary_check "migrate-ease-cpp" migrate-ease-cpp
 summary_check "aperf" aperf
 summary_check "llvm-bolt" llvm-bolt
-summary_check "perf" perf
+summary_perf
 summary_check "llvm-mca" llvm-mca
 summary_check "papi" papi_avail
 summary_check "processwatch" processwatch
@@ -454,3 +531,9 @@ summary_check "check-image" check-image
 summary_check "porting-advisor" porting-advisor
 summary_check "skopeo" skopeo
 summary_check "topdown-tool" topdown-tool
+
+if command -v docker >/dev/null 2>&1 || command -v podman >/dev/null 2>&1 || [ "${FORCE_DOCKER_WRAPPER:-0}" = "1" ]; then
+  summary_check "migrate-ease-docker" migrate-ease-docker
+else
+  echo "migrate-ease-docker: SKIPPED (no docker/podman detected)"
+fi

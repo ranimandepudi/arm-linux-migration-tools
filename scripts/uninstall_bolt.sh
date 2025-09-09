@@ -6,10 +6,10 @@ INSTALL_PREFIX="/opt/arm-migration-tools"
 BOLT_DST="$INSTALL_PREFIX/bolt-tools"
 
 # Remove symlinks
-if [ -L /usr/local/bin/llvm-bolt ]; then
+if [ -e /usr/local/bin/llvm-bolt ]; then
   sudo rm -f /usr/local/bin/llvm-bolt
 fi
-if [ -L /usr/local/bin/perf2bolt ]; then
+if [ -e /usr/local/bin/perf2bolt ]; then
   sudo rm -f /usr/local/bin/perf2bolt
 fi
 
